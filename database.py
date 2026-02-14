@@ -314,3 +314,44 @@ def get_recent_performance(days=7):
     conn.close()
 
     return [r[0] for r in rows]
+def label_outcomes():
+    """
+    Label historical plan logs based on real completion outcome.
+    """
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Find logs where deadline has passed
+    c.execute("""
+    SELECT pl.id, pl.milestone_id, pl.remaining_hours,
+           g.deadline
+    FROM plan_logs pl
+    JOIN milestones m ON pl.milestone_id = m.id
+    JOIN goals g ON m.goal_id = g.id
+    """)
+
+    rows = c.fetchall()
+
+    for row in rows:
+        log_id, milestone_id, remaining, deadline_str = row
+        deadline = datetime.fromisoformat(deadline_str)
+
+        if datetime.now() > deadline:
+            # Deadline passed
+            if remaining > 0:
+                label = 2  # WILL MISS
+            else:
+                label = 0  # SAFE
+        else:
+            continue
+
+        c.execute("""
+        UPDATE plan_logs
+        SET forecast = ?
+        WHERE id = ?
+        """, (label, log_id))
+
+    conn.commit()
+    conn.close()
+

@@ -9,6 +9,10 @@ from database import (
 from scheduler import generate_operator_briefing
 
 
+# --------------------------------------------------
+# SAFE INPUT HELPERS
+# --------------------------------------------------
+
 def safe_float(prompt):
     while True:
         value = input(prompt).strip()
@@ -27,13 +31,22 @@ def safe_int(prompt):
             print("Invalid integer. Try again.")
 
 
+# --------------------------------------------------
+# MENU
+# --------------------------------------------------
+
 def menu():
     print("\n1. Add Goal")
     print("2. Add Milestone to Goal")
     print("3. Generate Operator Briefing")
     print("4. Log Work")
-    print("5. Exit")
+    print("5. Retrain Model")
+    print("6. Exit")
 
+
+# --------------------------------------------------
+# MAIN LOOP
+# --------------------------------------------------
 
 if __name__ == "__main__":
     init_db()
@@ -124,12 +137,15 @@ if __name__ == "__main__":
             log_work(milestone_id, hours)
             print("Work logged.")
 
-        # -------- EXIT --------
+        # -------- RETRAIN MODEL --------
         elif choice == "5":
+            from online_training import retrain_model
+            retrain_model()
+
+        # -------- EXIT --------
+        elif choice == "6":
             print("Exiting.")
             break
-        
-        else:
-            print("Invalid option. Choose 1-5.")
 
-        
+        else:
+            print("Invalid option. Choose 1-6.")
