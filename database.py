@@ -272,12 +272,3 @@ def log_daily_summary(total_allocated, total_logged):
     conn.commit()
     conn.close()
 
-def debug_show_plan_logs():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    c.execute("SELECT * FROM plan_logs")
-    rows = c.fetchall()
-
-    conn.close()
-    return rows
