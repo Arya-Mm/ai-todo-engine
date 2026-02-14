@@ -1,21 +1,49 @@
-from database import init_db
+from database import init_db, add_task, get_pending_tasks
 from scheduler import schedule_tasks
 
-def get_sample_tasks():
-    return [
-        {"title": "DSA Practice", "est_duration": 2, "deadline_hours": 24, "value_score": 8, "difficulty": 6, "energy_required": 7},
-        {"title": "Gym", "est_duration": 1.5, "deadline_hours": 48, "value_score": 7, "difficulty": 5, "energy_required": 6},
-        {"title": "AI Project", "est_duration": 3, "deadline_hours": 12, "value_score": 10, "difficulty": 8, "energy_required": 8},
-        {"title": "Internship Application", "est_duration": 1, "deadline_hours": 6, "value_score": 9, "difficulty": 4, "energy_required": 5}
-    ]
+def menu():
+    print("\n1. Add Task")
+    print("2. Generate Schedule")
+    print("3. Exit")
+    print("4. Mark Task Complete")
+
 
 if __name__ == "__main__":
     init_db()
 
-    tasks = get_sample_tasks()
+    while True:
+        menu()
+        choice = input("Select option: ")
 
-    schedule = schedule_tasks(tasks, available_time=4, user_energy=7)
+        if choice == "1":
+            title = input("Title: ")
+            est = float(input("Estimated duration (hours): "))
+            deadline = float(input("Deadline in hours: "))
+            value = float(input("Value score (1-10): "))
+            difficulty = float(input("Difficulty (1-10): "))
+            energy = float(input("Energy required (1-10): "))
 
-    print("\nToday's Optimal Schedule:\n")
-    for t in schedule:
-        print("-", t["title"])
+            add_task(title, est, deadline, value, difficulty, energy)
+            print("Task added.")
+
+        elif choice == "2":
+            available = float(input("Available time (hours): "))
+            user_energy = float(input("Your current energy (1-10): "))
+
+            tasks = get_pending_tasks()
+            schedule = schedule_tasks(tasks, available, user_energy)
+
+            print("\nOptimal Schedule:")
+            for t in schedule:
+                print(f"- {t['title']} (ID: {t['id']})")
+
+        elif choice == "3":
+            break
+        elif choice == "4":
+            task_id = int(input("Task ID to mark complete: "))
+            actual = float(input("Actual duration (hours): "))
+            from database import complete_task
+            complete_task(task_id, actual)
+            print("Task logged and marked complete.")
+            break
+
