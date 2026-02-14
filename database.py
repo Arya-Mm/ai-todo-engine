@@ -12,7 +12,6 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    # Goals
     c.execute("""
     CREATE TABLE IF NOT EXISTS goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +20,6 @@ def init_db():
     )
     """)
 
-    # Milestones
     c.execute("""
     CREATE TABLE IF NOT EXISTS milestones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +29,6 @@ def init_db():
     )
     """)
 
-    # Work Logs
     c.execute("""
     CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +38,6 @@ def init_db():
     )
     """)
 
-    # Plan Logs (Decision Context Memory)
     c.execute("""
     CREATE TABLE IF NOT EXISTS plan_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,11 +48,11 @@ def init_db():
         actual_velocity REAL,
         allocated_today REAL,
         forecast TEXT,
+        reward REAL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
-    # Daily Summary (System Performance Memory)
     c.execute("""
     CREATE TABLE IF NOT EXISTS daily_summary (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,10 +108,7 @@ def get_goals():
     rows = c.fetchall()
     conn.close()
 
-    return [
-        {"id": r[0], "title": r[1], "deadline": r[2]}
-        for r in rows
-    ]
+    return [{"id": r[0], "title": r[1], "deadline": r[2]} for r in rows]
 
 
 def get_milestones():
@@ -164,7 +157,6 @@ def get_logged_hours(milestone_id):
 
     c.execute("SELECT SUM(hours_logged) FROM logs WHERE milestone_id = ?", (milestone_id,))
     total = c.fetchone()[0]
-
     conn.close()
     return total if total else 0
 
@@ -183,10 +175,7 @@ def get_recent_velocity(milestone_id, days=7):
     total = c.fetchone()[0]
     conn.close()
 
-    if not total:
-        return 0
-
-    return total / days
+    return (total / days) if total else 0
 
 
 def get_log_count(milestone_id):
@@ -195,13 +184,12 @@ def get_log_count(milestone_id):
 
     c.execute("SELECT COUNT(*) FROM logs WHERE milestone_id = ?", (milestone_id,))
     count = c.fetchone()[0]
-
     conn.close()
     return count
 
 
 # --------------------------------------------------
-# PLAN LOGGING (Decision Memory)
+# PLAN LOGGING
 # --------------------------------------------------
 
 def log_plan(milestone_id, remaining, days_remaining,
@@ -219,9 +207,10 @@ def log_plan(milestone_id, remaining, days_remaining,
         required_daily,
         actual_velocity,
         allocated_today,
-        forecast
+        forecast,
+        reward
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
     """, (
         milestone_id,
         remaining,
@@ -235,42 +224,6 @@ def log_plan(milestone_id, remaining, days_remaining,
     conn.commit()
     conn.close()
 
-
-# --------------------------------------------------
-# DAILY SYSTEM MEMORY
-# --------------------------------------------------
-
-def log_daily_summary(total_allocated, total_logged):
-    date = datetime.now().date().isoformat()
-
-    performance_ratio = 0
-    if total_allocated > 0:
-        performance_ratio = total_logged / total_allocated
-
-    overload_flag = 1 if total_allocated > 6 else 0
-
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    c.execute("""
-    INSERT INTO daily_summary (
-        date,
-        total_allocated,
-        total_logged,
-        performance_ratio,
-        overload_flag
-    )
-    VALUES (?, ?, ?, ?, ?)
-    """, (
-        date,
-        total_allocated,
-        total_logged,
-        performance_ratio,
-        overload_flag
-    ))
-
-    conn.commit()
-    conn.close()
 
 # --------------------------------------------------
 # ADAPTIVE CAPACITY SUPPORT
@@ -295,9 +248,7 @@ def get_recent_daily_output(days=7):
 
     total = sum(r[1] for r in rows)
     return total / days
-# --------------------------------------------------
-# SLIPPAGE DETECTION
-# --------------------------------------------------
+
 
 def get_recent_performance(days=7):
     conn = sqlite3.connect(DB_NAME)
@@ -314,44 +265,3 @@ def get_recent_performance(days=7):
     conn.close()
 
     return [r[0] for r in rows]
-def label_outcomes():
-    """
-    Label historical plan logs based on real completion outcome.
-    """
-
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    # Find logs where deadline has passed
-    c.execute("""
-    SELECT pl.id, pl.milestone_id, pl.remaining_hours,
-           g.deadline
-    FROM plan_logs pl
-    JOIN milestones m ON pl.milestone_id = m.id
-    JOIN goals g ON m.goal_id = g.id
-    """)
-
-    rows = c.fetchall()
-
-    for row in rows:
-        log_id, milestone_id, remaining, deadline_str = row
-        deadline = datetime.fromisoformat(deadline_str)
-
-        if datetime.now() > deadline:
-            # Deadline passed
-            if remaining > 0:
-                label = 2  # WILL MISS
-            else:
-                label = 0  # SAFE
-        else:
-            continue
-
-        c.execute("""
-        UPDATE plan_logs
-        SET forecast = ?
-        WHERE id = ?
-        """, (label, log_id))
-
-    conn.commit()
-    conn.close()
-
