@@ -42,8 +42,17 @@ if __name__ == "__main__":
         elif choice == "4":
             task_id = int(input("Task ID to mark complete: "))
             actual = float(input("Actual duration (hours): "))
-            from database import complete_task
-            complete_task(task_id, actual)
-            print("Task logged and marked complete.")
-            break
+            user_energy = float(input("Your energy during task (1-10): "))
+            available = float(input("Available time at scheduling (hours): "))
+
+    tasks = get_pending_tasks()
+    task = next((t for t in tasks if t["id"] == task_id), None)
+
+    if task:
+        from database import complete_task
+        complete_task(task, user_energy, available, actual)
+        print("Task logged and marked complete.")
+    else:
+        print("Task not found.")
+
 
