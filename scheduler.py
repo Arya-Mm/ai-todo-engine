@@ -5,25 +5,56 @@ from database import (
     get_logged_hours,
     get_recent_velocity,
     get_log_count,
+    get_recent_daily_output,
     log_plan
 )
 
 # ---------------- CONFIG ----------------
 MODEL_PATH = "deadline_risk_model.pkl"
-DAILY_WORK_HOURS = 6
+
+BASE_CAPACITY = 6
+MIN_CAPACITY = 2
+MAX_CAPACITY = 10
+
 VELOCITY_CORRECTION_FACTOR = 0.5
 VELOCITY_MIN_LOGS = 3
 
-# Load trained model
 model = joblib.load(MODEL_PATH)
 
+
+# --------------------------------------------------
+# ADAPTIVE CAPACITY
+# --------------------------------------------------
+
+def compute_adaptive_capacity():
+    recent_7 = get_recent_daily_output(7)
+    recent_3 = get_recent_daily_output(3)
+
+    baseline = max(recent_7, recent_3)
+
+    if baseline == 0:
+        return BASE_CAPACITY
+
+    capacity = baseline
+    capacity = max(MIN_CAPACITY, capacity)
+    capacity = min(MAX_CAPACITY, capacity)
+
+    return round(capacity, 2)
+
+
+# --------------------------------------------------
+# OPERATOR BRIEFING
+# --------------------------------------------------
 
 def generate_operator_briefing(milestones):
     today = datetime.now()
     scored = []
     context_data = {}
 
+    adaptive_capacity = compute_adaptive_capacity()
+
     print("\n===== OPERATOR BRIEFING =====\n")
+    print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs\n")
 
     for m in milestones:
         logged = get_logged_hours(m["id"])
@@ -45,9 +76,9 @@ def generate_operator_briefing(milestones):
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
         # ---------------- Deadline Load ----------------
-        if required_daily > DAILY_WORK_HOURS:
+        if required_daily > adaptive_capacity:
             deadline_load = "⚠ DEADLINE IMPOSSIBLE"
-        elif required_daily > DAILY_WORK_HOURS * 0.7:
+        elif required_daily > adaptive_capacity * 0.7:
             deadline_load = "⚡ HIGH LOAD"
         else:
             deadline_load = "OK"
@@ -57,8 +88,8 @@ def generate_operator_briefing(milestones):
 
             velocity_gap = required_daily - actual_velocity
             remaining_ratio = remaining / (remaining + 1)
-            workload_pressure = required_daily / DAILY_WORK_HOURS
-            allocation_ratio = required_daily / DAILY_WORK_HOURS
+            workload_pressure = required_daily / adaptive_capacity
+            allocation_ratio = required_daily / adaptive_capacity
 
             feature_vector = np.array([[
                 remaining,
@@ -108,7 +139,6 @@ def generate_operator_briefing(milestones):
 
         scored.append((adjusted_required, m, remaining))
 
-        # Store context for logging
         context_data[m["id"]] = {
             "remaining": remaining,
             "days_remaining": days_remaining,
@@ -121,7 +151,9 @@ def generate_operator_briefing(milestones):
     scored.sort(reverse=True, key=lambda x: x[0])
 
     plan = []
-    hours_left = DAILY_WORK_HOURS
+    hours_left = adaptive_capacity
+
+    print("===== TODAY'S EXECUTION PLAN =====\n")
 
     for urgency, m, remaining in scored:
         if hours_left <= 0:
@@ -131,14 +163,11 @@ def generate_operator_briefing(milestones):
         plan.append((m, round(allocate, 2)))
         hours_left -= allocate
 
-    print("===== TODAY'S EXECUTION PLAN =====\n")
-
     for m, hours in plan:
         print(f"- {m['title']} → {hours} hrs (ID: {m['id']})")
 
         ctx = context_data[m["id"]]
 
-        # Log ML decision
         log_plan(
             milestone_id=m["id"],
             remaining=ctx["remaining"],
