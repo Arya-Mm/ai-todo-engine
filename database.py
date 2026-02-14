@@ -272,3 +272,26 @@ def log_daily_summary(total_allocated, total_logged):
     conn.commit()
     conn.close()
 
+# --------------------------------------------------
+# ADAPTIVE CAPACITY SUPPORT
+# --------------------------------------------------
+
+def get_recent_daily_output(days=7):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    SELECT DATE(timestamp), SUM(hours_logged)
+    FROM logs
+    WHERE timestamp >= datetime('now', ?)
+    GROUP BY DATE(timestamp)
+    """, (f'-{days} days',))
+
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        return 0
+
+    total = sum(r[1] for r in rows)
+    return total / days
