@@ -4,6 +4,10 @@ from datetime import datetime, timedelta
 DB_NAME = "tasks.db"
 
 
+# --------------------------------------------------
+# INITIALIZATION
+# --------------------------------------------------
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -17,7 +21,7 @@ def init_db():
     )
     """)
 
-    # Milestones (belong to goals)
+    # Milestones
     c.execute("""
     CREATE TABLE IF NOT EXISTS milestones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +31,7 @@ def init_db():
     )
     """)
 
-    # Work logs
+    # Work Logs
     c.execute("""
     CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,9 +41,40 @@ def init_db():
     )
     """)
 
+    # Plan Logs (Decision Context Memory)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS plan_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        milestone_id INTEGER,
+        remaining_hours REAL,
+        days_remaining INTEGER,
+        required_daily REAL,
+        actual_velocity REAL,
+        allocated_today REAL,
+        forecast TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Daily Summary (System Performance Memory)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS daily_summary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT,
+        total_allocated REAL,
+        total_logged REAL,
+        performance_ratio REAL,
+        overload_flag INTEGER
+    )
+    """)
+
     conn.commit()
     conn.close()
 
+
+# --------------------------------------------------
+# GOALS & MILESTONES
+# --------------------------------------------------
 
 def add_goal(title, deadline_days):
     conn = sqlite3.connect(DB_NAME)
@@ -77,15 +112,10 @@ def get_goals():
     rows = c.fetchall()
     conn.close()
 
-    goals = []
-    for r in rows:
-        goals.append({
-            "id": r[0],
-            "title": r[1],
-            "deadline": r[2]
-        })
-
-    return goals
+    return [
+        {"id": r[0], "title": r[1], "deadline": r[2]}
+        for r in rows
+    ]
 
 
 def get_milestones():
@@ -100,16 +130,32 @@ def get_milestones():
     rows = c.fetchall()
     conn.close()
 
-    milestones = []
-    for r in rows:
-        milestones.append({
+    return [
+        {
             "id": r[0],
             "title": r[1],
             "total_hours": r[2],
             "deadline": r[3]
-        })
+        }
+        for r in rows
+    ]
 
-    return milestones
+
+# --------------------------------------------------
+# WORK LOGGING
+# --------------------------------------------------
+
+def log_work(milestone_id, hours):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    INSERT INTO logs (milestone_id, hours_logged)
+    VALUES (?, ?)
+    """, (milestone_id, hours))
+
+    conn.commit()
+    conn.close()
 
 
 def get_logged_hours(milestone_id):
@@ -123,17 +169,6 @@ def get_logged_hours(milestone_id):
     return total if total else 0
 
 
-def log_work(milestone_id, hours):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    c.execute("""
-    INSERT INTO logs (milestone_id, hours_logged)
-    VALUES (?, ?)
-    """, (milestone_id, hours))
-
-    conn.commit()
-    conn.close()
 def get_recent_velocity(milestone_id, days=7):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -152,3 +187,87 @@ def get_recent_velocity(milestone_id, days=7):
         return 0
 
     return total / days
+
+
+def get_log_count(milestone_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("SELECT COUNT(*) FROM logs WHERE milestone_id = ?", (milestone_id,))
+    count = c.fetchone()[0]
+
+    conn.close()
+    return count
+
+
+# --------------------------------------------------
+# PLAN LOGGING (Decision Memory)
+# --------------------------------------------------
+
+def log_plan(milestone_id, remaining, days_remaining,
+             required_daily, actual_velocity,
+             allocated, forecast):
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    INSERT INTO plan_logs (
+        milestone_id,
+        remaining_hours,
+        days_remaining,
+        required_daily,
+        actual_velocity,
+        allocated_today,
+        forecast
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        milestone_id,
+        remaining,
+        days_remaining,
+        required_daily,
+        actual_velocity,
+        allocated,
+        forecast
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# --------------------------------------------------
+# DAILY SYSTEM MEMORY
+# --------------------------------------------------
+
+def log_daily_summary(total_allocated, total_logged):
+    date = datetime.now().date().isoformat()
+
+    performance_ratio = 0
+    if total_allocated > 0:
+        performance_ratio = total_logged / total_allocated
+
+    overload_flag = 1 if total_allocated > 6 else 0
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    INSERT INTO daily_summary (
+        date,
+        total_allocated,
+        total_logged,
+        performance_ratio,
+        overload_flag
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        date,
+        total_allocated,
+        total_logged,
+        performance_ratio,
+        overload_flag
+    ))
+
+    conn.commit()
+    conn.close()
