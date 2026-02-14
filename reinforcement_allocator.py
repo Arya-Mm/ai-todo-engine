@@ -53,7 +53,7 @@ def train_policy():
     model.fit(X, y)
     joblib.dump(model, MODEL_PATH)
 
-    print("Reinforcement policy trained.")
+    print("Reinforcement allocation policy trained.")
     return model
 
 
@@ -66,7 +66,6 @@ def load_policy():
 
 def choose_allocation(state, max_capacity):
     model = load_policy()
-
     if model is None:
         return None
 
