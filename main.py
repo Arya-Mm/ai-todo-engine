@@ -6,13 +6,13 @@ from database import (
     get_milestones,
     log_work
 )
-from scheduler import schedule
+from scheduler import generate_operator_briefing
 
 
 def menu():
     print("\n1. Add Goal")
     print("2. Add Milestone to Goal")
-    print("3. Generate Today's Plan")
+    print("3. Generate Operator Briefing")
     print("4. Log Work")
     print("5. Exit")
 
@@ -22,21 +22,27 @@ if __name__ == "__main__":
 
     while True:
         menu()
-        choice = input("Select option: ")
+        choice = input("Select option: ").strip()
 
         if choice == "1":
-            title = input("Goal Title: ")
+            title = input("Goal Title: ").strip()
             deadline_days = float(input("Deadline in days: "))
             add_goal(title, deadline_days)
             print("Goal added.")
 
         elif choice == "2":
             goals = get_goals()
+
+            if not goals:
+                print("No goals found. Add a goal first.")
+                continue
+
+            print("\nAvailable Goals:")
             for g in goals:
                 print(f"{g['id']} → {g['title']}")
 
             goal_id = int(input("Goal ID: "))
-            title = input("Milestone Title: ")
+            title = input("Milestone Title: ").strip()
             hours = float(input("Total hours required: "))
 
             add_milestone(goal_id, title, hours)
@@ -44,11 +50,12 @@ if __name__ == "__main__":
 
         elif choice == "3":
             milestones = get_milestones()
-            plan = schedule(milestones)
 
-            print("\nToday's Execution Plan:")
-            for m, hours in plan:
-                print(f"- {m['title']} → {hours} hrs (ID: {m['id']})")
+            if not milestones:
+                print("No milestones found.")
+                continue
+
+            generate_operator_briefing(milestones)
 
         elif choice == "4":
             milestone_id = int(input("Milestone ID: "))
@@ -57,4 +64,8 @@ if __name__ == "__main__":
             print("Work logged.")
 
         elif choice == "5":
+            print("Exiting.")
             break
+
+        else:
+            print("Invalid option. Try again.")
