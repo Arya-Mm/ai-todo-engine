@@ -1,3 +1,10 @@
+import joblib
+import numpy as np
+
+MODEL_PATH = "deadline_risk_model.pkl"
+model = joblib.load(MODEL_PATH)
+
+
 from datetime import datetime
 from database import (
     get_logged_hours,
