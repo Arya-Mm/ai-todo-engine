@@ -1,42 +1,41 @@
 from datetime import datetime
 from database import get_logged_hours
 
+DAILY_WORK_HOURS = 6
 
-DAILY_WORK_HOURS = 6  # system-controlled
 
-
-def schedule(tasks):
+def schedule(milestones):
     today = datetime.now()
     scored = []
 
-    for task in tasks:
-        logged = get_logged_hours(task["id"])
-        remaining_hours = task["total_hours"] - logged
+    for m in milestones:
+        logged = get_logged_hours(m["id"])
+        remaining = m["total_hours"] - logged
 
-        if remaining_hours <= 0:
+        if remaining <= 0:
             continue
 
-        deadline = datetime.fromisoformat(task["deadline"])
+        deadline = datetime.fromisoformat(m["deadline"])
         days_remaining = (deadline - today).days
 
         if days_remaining <= 0:
             days_remaining = 1
 
-        required_daily = remaining_hours / days_remaining
+        required_daily = remaining / days_remaining
 
-        scored.append((required_daily, task, remaining_hours))
+        scored.append((required_daily, m, remaining))
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
     plan = []
-    hours_left_today = DAILY_WORK_HOURS
+    hours_left = DAILY_WORK_HOURS
 
-    for urgency, task, remaining in scored:
-        if hours_left_today <= 0:
+    for urgency, m, remaining in scored:
+        if hours_left <= 0:
             break
 
-        allocate = min(urgency, hours_left_today, remaining)
-        plan.append((task, round(allocate, 2)))
-        hours_left_today -= allocate
+        allocate = min(urgency, remaining, hours_left)
+        plan.append((m, round(allocate, 2)))
+        hours_left -= allocate
 
     return plan
