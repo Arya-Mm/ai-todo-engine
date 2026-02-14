@@ -6,6 +6,7 @@ from database import (
     get_recent_velocity,
     get_log_count,
     get_recent_daily_output,
+    get_recent_performance,
     log_plan
 )
 
@@ -19,7 +20,27 @@ MAX_CAPACITY = 10
 VELOCITY_CORRECTION_FACTOR = 0.5
 VELOCITY_MIN_LOGS = 3
 
+SLIPPAGE_THRESHOLD = 0.7
+SLIPPAGE_STREAK_LIMIT = 3
+
 model = joblib.load(MODEL_PATH)
+
+
+# --------------------------------------------------
+# SLIPPAGE DETECTION
+# --------------------------------------------------
+
+def detect_slippage_streak():
+    performances = get_recent_performance(7)
+
+    streak = 0
+    for ratio in performances:
+        if ratio is not None and ratio < SLIPPAGE_THRESHOLD:
+            streak += 1
+        else:
+            break
+
+    return streak >= SLIPPAGE_STREAK_LIMIT, streak
 
 
 # --------------------------------------------------
@@ -33,13 +54,19 @@ def compute_adaptive_capacity():
     baseline = max(recent_7, recent_3)
 
     if baseline == 0:
-        return BASE_CAPACITY
+        capacity = BASE_CAPACITY
+    else:
+        capacity = baseline
 
-    capacity = baseline
+    slippage_flag, streak = detect_slippage_streak()
+
+    if slippage_flag:
+        capacity *= 0.8  # reduce 20% during collapse
+
     capacity = max(MIN_CAPACITY, capacity)
     capacity = min(MAX_CAPACITY, capacity)
 
-    return round(capacity, 2)
+    return round(capacity, 2), slippage_flag, streak
 
 
 # --------------------------------------------------
@@ -51,10 +78,15 @@ def generate_operator_briefing(milestones):
     scored = []
     context_data = {}
 
-    adaptive_capacity = compute_adaptive_capacity()
+    adaptive_capacity, slippage_flag, streak = compute_adaptive_capacity()
 
     print("\n===== OPERATOR BRIEFING =====\n")
-    print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs\n")
+    print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs")
+
+    if slippage_flag:
+        print(f"⚠ SLIPPAGE DETECTED: {streak}-day underperformance streak\n")
+    else:
+        print("")
 
     for m in milestones:
         logged = get_logged_hours(m["id"])
@@ -75,16 +107,26 @@ def generate_operator_briefing(milestones):
 
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
+        # ---------------- Feasibility Check ----------------
+        max_possible_output = adaptive_capacity * days_remaining
+        infeasible = remaining > max_possible_output
+
         # ---------------- Deadline Load ----------------
-        if required_daily > adaptive_capacity:
+        if infeasible:
+            deadline_load = "🚫 IMPOSSIBLE"
+        elif required_daily > adaptive_capacity:
             deadline_load = "⚠ DEADLINE IMPOSSIBLE"
         elif required_daily > adaptive_capacity * 0.7:
             deadline_load = "⚡ HIGH LOAD"
         else:
             deadline_load = "OK"
 
-        # ---------------- ML Forecast ----------------
-        if velocity_active:
+        # ---------------- Forecast ----------------
+        if infeasible:
+            forecast = "🚫 MATHEMATICALLY INFEASIBLE"
+            confidence = 100.0
+
+        elif velocity_active:
 
             velocity_gap = required_daily - actual_velocity
             remaining_ratio = remaining / (remaining + 1)
@@ -126,7 +168,20 @@ def generate_operator_briefing(milestones):
         print(f"  7-Day Velocity: {round(actual_velocity,2)} hrs/day")
         print(f"  Completion: {round(completion_percent,2)}%")
         print(f"  Deadline Load: {deadline_load}")
-        print(f"  ML Forecast: {forecast} ({confidence}% confidence)\n")
+        print(f"  Forecast: {forecast} ({confidence}% confidence)")
+
+        # ---------------- Enforcement Output ----------------
+        if infeasible:
+            extra_hours = round(remaining - max_possible_output, 2)
+            required_capacity = round(remaining / days_remaining, 2)
+            extra_days = round((remaining / adaptive_capacity) - days_remaining, 2)
+
+            print("  ⚠ ENFORCEMENT REQUIRED")
+            print(f"  Extra Hours Beyond Capacity: {extra_hours}")
+            print(f"  Required Daily Capacity: {required_capacity} hrs/day")
+            print(f"  Deadline Extension Needed: {extra_days} days")
+
+        print("")
 
         # ---------------- Adaptive Allocation ----------------
         if velocity_active:
@@ -137,7 +192,13 @@ def generate_operator_briefing(milestones):
         else:
             adjusted_required = required_daily
 
-        scored.append((adjusted_required, m, remaining))
+        if slippage_flag:
+            adjusted_required *= 0.7  # shrink during collapse
+
+        if infeasible:
+            adjusted_required = required_daily  # enforce reality
+
+        scored.append((adjusted_required, m, remaining, infeasible))
 
         context_data[m["id"]] = {
             "remaining": remaining,
@@ -155,7 +216,7 @@ def generate_operator_briefing(milestones):
 
     print("===== TODAY'S EXECUTION PLAN =====\n")
 
-    for urgency, m, remaining in scored:
+    for urgency, m, remaining, infeasible in scored:
         if hours_left <= 0:
             break
 
