@@ -10,6 +10,7 @@ from database import (
     log_plan
 )
 from reinforcement_allocator import choose_allocation
+from state_embedding import compute_execution_embedding
 
 
 # ---------------- CONFIG ----------------
