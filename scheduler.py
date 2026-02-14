@@ -94,7 +94,8 @@ def generate_operator_briefing(milestones):
 
         logged = get_logged_hours(m["id"])
         remaining = m["total_hours"] - logged
-
+        embedding = compute_execution_embedding(m, adaptive_capacity)
+    
         if remaining <= 0:
             continue
 
