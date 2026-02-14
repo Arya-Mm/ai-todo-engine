@@ -1,21 +1,42 @@
-from scorer import calculate_priority
+from datetime import datetime
+from database import get_logged_hours
 
 
-def schedule_tasks(tasks, available_time):
+DAILY_WORK_HOURS = 6  # system-controlled
+
+
+def schedule(tasks):
+    today = datetime.now()
     scored = []
 
-    for t in tasks:
-        score = calculate_priority(t)
-        scored.append((score, t))
+    for task in tasks:
+        logged = get_logged_hours(task["id"])
+        remaining_hours = task["total_hours"] - logged
+
+        if remaining_hours <= 0:
+            continue
+
+        deadline = datetime.fromisoformat(task["deadline"])
+        days_remaining = (deadline - today).days
+
+        if days_remaining <= 0:
+            days_remaining = 1
+
+        required_daily = remaining_hours / days_remaining
+
+        scored.append((required_daily, task, remaining_hours))
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
-    scheduled = []
-    time_used = 0
+    plan = []
+    hours_left_today = DAILY_WORK_HOURS
 
-    for score, task in scored:
-        if time_used + task["est_duration"] <= available_time:
-            scheduled.append(task)
-            time_used += task["est_duration"]
+    for urgency, task, remaining in scored:
+        if hours_left_today <= 0:
+            break
 
-    return scheduled
+        allocate = min(urgency, hours_left_today, remaining)
+        plan.append((task, round(allocate, 2)))
+        hours_left_today -= allocate
+
+    return plan
