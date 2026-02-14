@@ -40,33 +40,20 @@ def generate_operator_briefing(milestones):
         log_count = get_log_count(m["id"])
         completion_percent = (logged / m["total_hours"]) * 100
 
-        # ---------------- Deadline Load Risk ----------------
-        if required_daily > DAILY_WORK_HOURS:
-            deadline_risk = "⚠ DEADLINE IMPOSSIBLE"
-        elif required_daily > DAILY_WORK_HOURS * 0.7:
-            deadline_risk = "⚡ HIGH LOAD"
-        else:
-            deadline_risk = "OK"
-
-        # ---------------- Velocity Activation ----------------
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
-        if velocity_active:
-            velocity_gap = required_daily - actual_velocity
-
-            if velocity_gap > required_daily * 0.5:
-                velocity_status = "⚠ BEHIND"
-            elif velocity_gap > 0:
-                velocity_status = "⚡ SLIPPING"
-            else:
-                velocity_status = "ON TRACK"
+        # ----- Deadline Load -----
+        if required_daily > DAILY_WORK_HOURS:
+            deadline_load = "⚠ DEADLINE IMPOSSIBLE"
+        elif required_daily > DAILY_WORK_HOURS * 0.7:
+            deadline_load = "⚡ HIGH LOAD"
         else:
-            velocity_gap = 0
-            velocity_status = "WARMUP"
+            deadline_load = "OK"
 
-        # ---------------- Deadline Failure Prediction ----------------
+        # ----- Forecast -----
         if velocity_active:
             projected_days_needed = remaining / actual_velocity
+
             if projected_days_needed > days_remaining:
                 forecast = "🚨 WILL MISS DEADLINE"
             elif projected_days_needed > days_remaining * 0.8:
@@ -82,13 +69,27 @@ def generate_operator_briefing(milestones):
         print(f"  Required Daily: {round(required_daily,2)} hrs/day")
         print(f"  7-Day Velocity: {round(actual_velocity,2)} hrs/day")
         print(f"  Completion: {round(completion_percent,2)}%")
-        print(f"  Deadline Load: {deadline_risk}")
-        print(f"  Velocity Status: {velocity_status}")
+        print(f"  Deadline Load: {deadline_load}")
         print(f"  Deadline Forecast: {forecast}")
+
+        # ----- Recovery Planner -----
+        if velocity_active and forecast == "🚨 WILL MISS DEADLINE":
+            required_velocity_to_recover = required_daily
+            days_needed = remaining / actual_velocity
+            extra_days_required = round(days_needed - days_remaining, 2)
+
+            max_possible = actual_velocity * days_remaining
+            scope_cut = round(remaining - max_possible, 2)
+
+            print("  --- RECOVERY OPTIONS ---")
+            print(f"  1) Increase daily output to: {round(required_velocity_to_recover,2)} hrs/day")
+            print(f"  2) Extend deadline by: {extra_days_required} days")
+            print(f"  3) Reduce scope by: {scope_cut} hours")
         print("")
 
-        # ---------------- Adaptive Allocation ----------------
+        # ----- Adaptive Allocation -----
         if velocity_active:
+            velocity_gap = required_daily - actual_velocity
             adjusted_required = required_daily + (velocity_gap * VELOCITY_CORRECTION_FACTOR)
         else:
             adjusted_required = required_daily
