@@ -1,5 +1,5 @@
 from datetime import datetime
-from database import get_logged_hours
+from database import get_logged_hours, get_recent_velocity
 
 DAILY_WORK_HOURS = 6
 
@@ -24,25 +24,31 @@ def generate_operator_briefing(milestones):
             days_remaining = 1
 
         required_daily = remaining / days_remaining
+        actual_velocity = get_recent_velocity(m["id"], days=7)
+
+        velocity_gap = required_daily - actual_velocity
         completion_percent = (logged / m["total_hours"]) * 100
 
-        # Risk level
-        if required_daily > DAILY_WORK_HOURS:
-            risk = "⚠ HIGH RISK"
-        elif required_daily > DAILY_WORK_HOURS * 0.7:
+        # Risk logic
+        if velocity_gap > required_daily * 0.5:
+            risk = "⚠ HIGH RISK (Behind)"
+        elif velocity_gap > 0:
             risk = "⚡ MEDIUM RISK"
         else:
-            risk = "✅ STABLE"
+            risk = "✅ ON TRACK"
 
         print(f"Milestone: {m['title']}")
         print(f"  Remaining Hours: {round(remaining,2)}")
         print(f"  Days Remaining: {days_remaining}")
         print(f"  Required Daily: {round(required_daily,2)} hrs/day")
+        print(f"  7-Day Velocity: {round(actual_velocity,2)} hrs/day")
         print(f"  Completion: {round(completion_percent,2)}%")
         print(f"  Status: {risk}")
         print("")
 
-        scored.append((required_daily, m, remaining))
+        # Adaptive allocation logic
+        adjusted_required = required_daily + max(velocity_gap, 0)
+        scored.append((adjusted_required, m, remaining))
 
     # Sort by urgency
     scored.sort(reverse=True, key=lambda x: x[0])

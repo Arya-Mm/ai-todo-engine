@@ -134,3 +134,21 @@ def log_work(milestone_id, hours):
 
     conn.commit()
     conn.close()
+def get_recent_velocity(milestone_id, days=7):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    SELECT SUM(hours_logged)
+    FROM logs
+    WHERE milestone_id = ?
+    AND timestamp >= datetime('now', ?)
+    """, (milestone_id, f'-{days} days'))
+
+    total = c.fetchone()[0]
+    conn.close()
+
+    if not total:
+        return 0
+
+    return total / days
