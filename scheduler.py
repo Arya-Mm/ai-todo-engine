@@ -9,6 +9,8 @@ from database import (
     get_recent_performance,
     log_plan
 )
+from reinforcement_allocator import choose_allocation
+
 
 # ---------------- CONFIG ----------------
 MODEL_PATH = "deadline_risk_model.pkl"
@@ -53,15 +55,12 @@ def compute_adaptive_capacity():
 
     baseline = max(recent_7, recent_3)
 
-    if baseline == 0:
-        capacity = BASE_CAPACITY
-    else:
-        capacity = baseline
+    capacity = BASE_CAPACITY if baseline == 0 else baseline
 
     slippage_flag, streak = detect_slippage_streak()
 
     if slippage_flag:
-        capacity *= 0.8  # reduce 20% during collapse
+        capacity *= 0.8
 
     capacity = max(MIN_CAPACITY, capacity)
     capacity = min(MAX_CAPACITY, capacity)
@@ -88,7 +87,10 @@ def generate_operator_briefing(milestones):
     else:
         print("")
 
+    # ---------------- ANALYSIS LOOP ----------------
+
     for m in milestones:
+
         logged = get_logged_hours(m["id"])
         remaining = m["total_hours"] - logged
 
@@ -107,7 +109,7 @@ def generate_operator_briefing(milestones):
 
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
-        # ---------------- Feasibility Check ----------------
+        # ---------------- Feasibility ----------------
         max_possible_output = adaptive_capacity * days_remaining
         infeasible = remaining > max_possible_output
 
@@ -121,7 +123,7 @@ def generate_operator_briefing(milestones):
         else:
             deadline_load = "OK"
 
-        # ---------------- Forecast ----------------
+        # ---------------- ML Forecast ----------------
         if infeasible:
             forecast = "🚫 MATHEMATICALLY INFEASIBLE"
             confidence = 100.0
@@ -170,7 +172,6 @@ def generate_operator_briefing(milestones):
         print(f"  Deadline Load: {deadline_load}")
         print(f"  Forecast: {forecast} ({confidence}% confidence)")
 
-        # ---------------- Enforcement Output ----------------
         if infeasible:
             extra_hours = round(remaining - max_possible_output, 2)
             required_capacity = round(remaining / days_remaining, 2)
@@ -183,7 +184,7 @@ def generate_operator_briefing(milestones):
 
         print("")
 
-        # ---------------- Adaptive Allocation ----------------
+        # ---------------- Allocation Urgency ----------------
         if velocity_active:
             velocity_gap = required_daily - actual_velocity
             adjusted_required = required_daily + (
@@ -193,13 +194,14 @@ def generate_operator_briefing(milestones):
             adjusted_required = required_daily
 
         if slippage_flag:
-            adjusted_required *= 0.7  # shrink during collapse
+            adjusted_required *= 0.7
 
         if infeasible:
-            adjusted_required = required_daily  # enforce reality
+            adjusted_required = required_daily
 
-        scored.append((adjusted_required, m, remaining, infeasible))
+        scored.append((adjusted_required, m["id"]))
 
+        # Store full state for RL
         context_data[m["id"]] = {
             "remaining": remaining,
             "days_remaining": days_remaining,
@@ -208,7 +210,8 @@ def generate_operator_briefing(milestones):
             "forecast": forecast
         }
 
-    # ---------------- Allocation ----------------
+    # ---------------- ALLOCATION ----------------
+
     scored.sort(reverse=True, key=lambda x: x[0])
 
     plan = []
@@ -216,21 +219,40 @@ def generate_operator_briefing(milestones):
 
     print("===== TODAY'S EXECUTION PLAN =====\n")
 
-    for urgency, m, remaining, infeasible in scored:
+    for urgency, milestone_id in scored:
+
         if hours_left <= 0:
             break
 
-        allocate = min(urgency, remaining, hours_left)
-        plan.append((m, round(allocate, 2)))
+        ctx = context_data[milestone_id]
+
+        state = (
+            ctx["remaining"],
+            ctx["days_remaining"],
+            ctx["required_daily"],
+            ctx["actual_velocity"]
+        )
+
+        rl_alloc = choose_allocation(state, adaptive_capacity)
+
+        if rl_alloc:
+            allocate = min(rl_alloc, hours_left)
+        else:
+            allocate = min(urgency, ctx["remaining"], hours_left)
+
+        plan.append((milestone_id, round(allocate, 2)))
         hours_left -= allocate
 
-    for m, hours in plan:
-        print(f"- {m['title']} → {hours} hrs (ID: {m['id']})")
+    # ---------------- OUTPUT + LOGGING ----------------
 
-        ctx = context_data[m["id"]]
+    for milestone_id, hours in plan:
+
+        print(f"- ID {milestone_id} → {hours} hrs")
+
+        ctx = context_data[milestone_id]
 
         log_plan(
-            milestone_id=m["id"],
+            milestone_id=milestone_id,
             remaining=ctx["remaining"],
             days_remaining=ctx["days_remaining"],
             required_daily=ctx["required_daily"],
