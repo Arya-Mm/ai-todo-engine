@@ -1,9 +1,11 @@
-def schedule_tasks(tasks, available_time, user_energy=5):
-    from scorer import calculate_priority
+from scorer import calculate_priority
 
+
+def schedule_tasks(tasks, available_time):
     scored = []
+
     for t in tasks:
-        score = calculate_priority(t, user_energy)
+        score = calculate_priority(t)
         scored.append((score, t))
 
     scored.sort(reverse=True, key=lambda x: x[0])

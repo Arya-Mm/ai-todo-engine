@@ -1,13 +1,20 @@
-def calculate_priority(task, user_energy=5):
-    urgency = 1 / (task["deadline_hours"] + 1)
+from datetime import datetime
 
-    energy_match = 1 - abs(user_energy - task["energy_required"]) / 10
+
+def calculate_priority(task):
+    deadline = datetime.fromisoformat(task["deadline"])
+    hours_remaining = (deadline - datetime.now()).total_seconds() / 3600
+
+    # Prevent negative explosion if overdue
+    if hours_remaining < 0:
+        hours_remaining = 0
+
+    urgency = 1 / (hours_remaining + 1)
 
     score = (
-        urgency * 0.4 +
+        urgency * 0.5 +
         task["value_score"] * 0.3 -
-        task["difficulty"] * 0.1 +
-        energy_match * 0.2
+        task["difficulty"] * 0.2
     )
 
     return score
