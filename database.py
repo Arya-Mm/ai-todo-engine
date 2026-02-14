@@ -295,3 +295,22 @@ def get_recent_daily_output(days=7):
 
     total = sum(r[1] for r in rows)
     return total / days
+# --------------------------------------------------
+# SLIPPAGE DETECTION
+# --------------------------------------------------
+
+def get_recent_performance(days=7):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    SELECT performance_ratio
+    FROM daily_summary
+    ORDER BY date DESC
+    LIMIT ?
+    """, (days,))
+
+    rows = c.fetchall()
+    conn.close()
+
+    return [r[0] for r in rows]
