@@ -7,17 +7,22 @@ def init_db():
     c = conn.cursor()
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        est_duration REAL,
-        deadline_hours REAL,
-        value_score REAL,
-        difficulty REAL,
-        energy_required REAL,
-        completed INTEGER DEFAULT 0
-    )
-    """)
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER,
+    est_duration REAL,
+    deadline_hours REAL,
+    value_score REAL,
+    difficulty REAL,
+    energy_required REAL,
+    user_energy REAL,
+    available_time REAL,
+    completed INTEGER,
+    actual_duration REAL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS logs (
@@ -63,15 +68,42 @@ def get_pending_tasks():
         })
 
     return tasks
-def complete_task(task_id, actual_duration):
+def complete_task(task, user_energy, available_time, actual_duration):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    c.execute("UPDATE tasks SET completed = 1 WHERE id = ?", (task_id,))
+    c.execute("UPDATE tasks SET completed = 1 WHERE id = ?", (task["id"],))
+
     c.execute("""
-    INSERT INTO logs (task_id, completed, actual_duration)
-    VALUES (?, ?, ?)
-    """, (task_id, 1, actual_duration))
+    INSERT INTO logs (
+        task_id,
+        est_duration,
+        deadline_hours,
+        value_score,
+        difficulty,
+        energy_required,
+        user_energy,
+        available_time,
+        completed,
+        actual_duration
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        task["id"],
+        task["est_duration"],
+        task["deadline_hours"],
+        task["value_score"],
+        task["difficulty"],
+        task["energy_required"],
+        user_energy,
+        available_time,
+        1,
+        actual_duration
+    ))
+
+    conn.commit()
+    conn.close()
+
 
     conn.commit()
     conn.close()
