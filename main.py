@@ -1,12 +1,22 @@
+from datetime import datetime
+
 from database import (
     init_db,
     add_goal,
     add_milestone,
     get_goals,
     get_milestones,
-    log_work
+    log_work,
+    get_last_plan_state,
+    get_logged_hours,
+    compute_reward,
+    update_plan_reward,
+    log_transition
 )
-from scheduler import generate_operator_briefing
+
+from scheduler import generate_operator_briefing, compute_execution_embedding
+from td_learning import update_q
+from online_training import retrain_model
 
 
 # --------------------------------------------------
@@ -39,8 +49,8 @@ def menu():
     print("\n1. Add Goal")
     print("2. Add Milestone to Goal")
     print("3. Generate Operator Briefing")
-    print("4. Log Work")
-    print("5. Retrain Model")
+    print("4. Log Work (Triggers Learning)")
+    print("5. Retrain Deadline Model")
     print("6. Exit")
 
 
@@ -49,6 +59,7 @@ def menu():
 # --------------------------------------------------
 
 if __name__ == "__main__":
+
     init_db()
 
     while True:
@@ -72,10 +83,10 @@ if __name__ == "__main__":
 
         # -------- ADD MILESTONE --------
         elif choice == "2":
-            goals = get_goals()
 
+            goals = get_goals()
             if not goals:
-                print("No goals found. Add a goal first.")
+                print("No goals found.")
                 continue
 
             print("\nAvailable Goals:")
@@ -103,18 +114,18 @@ if __name__ == "__main__":
 
         # -------- OPERATOR BRIEFING --------
         elif choice == "3":
-            milestones = get_milestones()
 
+            milestones = get_milestones()
             if not milestones:
                 print("No milestones found.")
                 continue
 
             generate_operator_briefing(milestones)
 
-        # -------- LOG WORK --------
+        # -------- LOG WORK + TD LEARNING --------
         elif choice == "4":
-            milestones = get_milestones()
 
+            milestones = get_milestones()
             if not milestones:
                 print("No milestones found.")
                 continue
@@ -134,12 +145,82 @@ if __name__ == "__main__":
                 print("Hours must be positive.")
                 continue
 
-            log_work(milestone_id, hours)
-            print("Work logged.")
+            # -------- FETCH PREVIOUS PLAN STATE --------
+            prev_plan = get_last_plan_state(milestone_id)
 
-        # -------- RETRAIN MODEL --------
+            if not prev_plan:
+                print("No previous plan found. Generate briefing first.")
+                continue
+
+            milestone = next(m for m in milestones if m["id"] == milestone_id)
+
+            # -------- PREVIOUS STATE EMBEDDING --------
+            adaptive_capacity = 6  # can replace with dynamic call
+            prev_embedding = compute_execution_embedding(
+                milestone,
+                adaptive_capacity
+            )
+
+            # -------- LOG WORK --------
+            log_work(milestone_id, hours)
+
+            # -------- NEW STATE --------
+            logged = get_logged_hours(milestone_id)
+            remaining = milestone["total_hours"] - logged
+
+            deadline = datetime.fromisoformat(milestone["deadline"])
+            days_remaining = max((deadline - datetime.now()).days, 1)
+
+            new_required_daily = remaining / days_remaining
+            performance_ratio = (
+                hours / prev_plan["required_daily"]
+                if prev_plan["required_daily"] > 0 else 0
+            )
+
+            new_forecast = prev_plan["forecast"]
+            completed = remaining <= 0
+
+            # -------- COMPUTE REWARD --------
+            reward = compute_reward(
+                prev_plan["required_daily"],
+                new_required_daily,
+                performance_ratio,
+                prev_plan["forecast"],
+                new_forecast,
+                completed
+            )
+
+            # -------- UPDATE PLAN LOG --------
+            update_plan_reward(prev_plan["plan_id"], reward)
+
+            # -------- NEXT EMBEDDING --------
+            next_embedding = compute_execution_embedding(
+                milestone,
+                adaptive_capacity
+            )
+
+            # -------- TD UPDATE --------
+            update_q(
+                prev_embedding,
+                prev_plan["required_daily"],
+                reward,
+                next_embedding
+            )
+
+            # -------- LOG TRANSITION --------
+            log_transition(
+                milestone_id,
+                prev_embedding,
+                prev_plan["required_daily"],
+                reward,
+                next_embedding
+            )
+
+            print(f"Work logged.")
+            print(f"Reward: {reward}")
+
+        # -------- RETRAIN DEADLINE MODEL --------
         elif choice == "5":
-            from online_training import retrain_model
             retrain_model()
 
         # -------- EXIT --------
