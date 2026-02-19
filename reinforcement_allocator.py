@@ -1,94 +1,116 @@
-import sqlite3
 import numpy as np
-import pandas as pd
-import joblib
-from sklearn.ensemble import RandomForestRegressor
+import pickle
+import os
+import random
 
-DB_NAME = "tasks.db"
-MODEL_PATH = "allocation_policy.pkl"
+# ==================================================
+# CONFIG
+# ==================================================
 
+MODEL_PATH = "td_function_model.pkl"
 
-def fetch_reward_data():
-    conn = sqlite3.connect(DB_NAME)
+ALPHA = 0.01      # learning rate
+GAMMA = 0.95      # discount factor
+EPSILON = 0.15    # exploration rate
 
-    df = pd.read_sql_query("""
-    SELECT
-        remaining_hours,
-        days_remaining,
-        required_daily,
-        actual_velocity,
-        allocated_today,
-        reward
-    FROM plan_logs
-    WHERE reward IS NOT NULL
-    """, conn)
-
-    conn.close()
-    return df
+ACTION_SPACE = [0.5, 1, 2, 3, 4, 5]  # possible hour allocations
 
 
-def train_policy():
-    df = fetch_reward_data()
+# ==================================================
+# MODEL LOAD / INIT
+# ==================================================
 
-    if len(df) < 50:
-        print("Not enough reward data to train policy.")
+def load_model():
+    if os.path.exists(MODEL_PATH):
+        with open(MODEL_PATH, "rb") as f:
+            return pickle.load(f)
+    else:
+        # initialize small random weights
+        return np.random.randn(16) * 0.01
+
+
+def save_model(weights):
+    with open(MODEL_PATH, "wb") as f:
+        pickle.dump(weights, f)
+
+
+weights = load_model()
+
+
+# ==================================================
+# FEATURE CONSTRUCTION φ(s,a)
+# ==================================================
+
+def build_features(embedding, action):
+    """
+    Combine state embedding and action into feature vector.
+    """
+
+    action_vector = np.array([action, action ** 2])
+
+    return np.concatenate([embedding, action_vector])
+
+
+# ==================================================
+# Q VALUE
+# ==================================================
+
+def q_value(embedding, action):
+    features = build_features(embedding, action)
+    return np.dot(weights, features)
+
+
+# ==================================================
+# POLICY
+# ==================================================
+
+def choose_allocation(embedding, max_capacity):
+
+    # ε-greedy exploration
+    if random.random() < EPSILON:
+        return random.choice(ACTION_SPACE)
+
+    # exploit
+    q_values = []
+
+    for a in ACTION_SPACE:
+        if a <= max_capacity:
+            q_values.append((a, q_value(embedding, a)))
+
+    if not q_values:
         return None
 
-    X = df[[
-        "remaining_hours",
-        "days_remaining",
-        "required_daily",
-        "actual_velocity",
-        "allocated_today"
-    ]]
+    best_action = max(q_values, key=lambda x: x[1])[0]
 
-    y = df["reward"]
-
-    model = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=8,
-        random_state=42
-    )
-
-    model.fit(X, y)
-    joblib.dump(model, MODEL_PATH)
-
-    print("Reinforcement allocation policy trained.")
-    return model
+    return best_action
 
 
-def load_policy():
-    try:
-        return joblib.load(MODEL_PATH)
-    except:
-        return None
+# ==================================================
+# TD UPDATE
+# ==================================================
 
+def td_update(prev_embedding, action, reward, next_embedding):
 
-def choose_allocation(state, max_capacity):
-    model = load_policy()
-    if model is None:
-        return None
+    global weights
 
-    remaining, days_remaining, required_daily, actual_velocity = state
+    prev_features = build_features(prev_embedding, action)
 
-    candidates = np.linspace(0.5, max_capacity, 10)
+    # Current Q
+    current_q = np.dot(weights, prev_features)
 
-    best_score = -999
-    best_alloc = required_daily
+    # Next max Q
+    next_q_values = [
+        q_value(next_embedding, a) for a in ACTION_SPACE
+    ]
 
-    for alloc in candidates:
-        feature = np.array([[
-            remaining,
-            days_remaining,
-            required_daily,
-            actual_velocity,
-            alloc
-        ]])
+    max_next_q = max(next_q_values) if next_q_values else 0
 
-        predicted_reward = model.predict(feature)[0]
+    # TD target
+    target = reward + GAMMA * max_next_q
 
-        if predicted_reward > best_score:
-            best_score = predicted_reward
-            best_alloc = alloc
+    td_error = target - current_q
 
-    return round(min(best_alloc, remaining, max_capacity), 2)
+    # Gradient update
+    weights += ALPHA * td_error * prev_features
+
+    save_model(weights)
