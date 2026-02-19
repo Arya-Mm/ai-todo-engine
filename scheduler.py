@@ -8,10 +8,18 @@ from database import (
     get_log_count,
     get_recent_daily_output,
     get_recent_performance,
-    log_plan
+    get_last_plan_state,
+    update_plan_reward,
+    log_plan,
+    log_transition,
+    compute_reward
 )
 
-from reinforcement_allocator import choose_allocation
+from reinforcement_allocator import (
+    choose_allocation,
+    td_update
+)
+
 from state_embedding import compute_execution_embedding
 
 
@@ -71,28 +79,10 @@ def compute_execution_phase():
 
 
 # ==================================================
-# SLIPPAGE DETECTION
-# ==================================================
-
-def detect_slippage_streak():
-    performances = get_recent_performance(7)
-
-    streak = 0
-    for ratio in performances:
-        if ratio is not None and ratio < SLIPPAGE_THRESHOLD:
-            streak += 1
-        else:
-            break
-
-    return streak >= SLIPPAGE_STREAK_LIMIT, streak
-
-
-# ==================================================
 # ADAPTIVE CAPACITY
 # ==================================================
 
 def compute_adaptive_capacity():
-
     recent_7 = get_recent_daily_output(7)
     recent_3 = get_recent_daily_output(3)
 
@@ -101,7 +91,6 @@ def compute_adaptive_capacity():
 
     phase = compute_execution_phase()
 
-    # Phase-aware scaling
     if phase == "COLLAPSE":
         capacity *= 0.7
     elif phase == "SURGE":
@@ -114,7 +103,7 @@ def compute_adaptive_capacity():
 
 
 # ==================================================
-# OPERATOR BRIEFING
+# MAIN EXECUTION LOOP
 # ==================================================
 
 def generate_operator_briefing(milestones):
@@ -129,9 +118,9 @@ def generate_operator_briefing(milestones):
     print(f"Execution Phase: {phase}")
     print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs\n")
 
-    # --------------------------------------------------
-    # ANALYSIS LOOP
-    # --------------------------------------------------
+    # ------------------------------------------
+    # ANALYSIS
+    # ------------------------------------------
 
     for m in milestones:
 
@@ -149,35 +138,14 @@ def generate_operator_briefing(milestones):
         required_daily = remaining / days_remaining
         actual_velocity = get_recent_velocity(m["id"], days=7)
         log_count = get_log_count(m["id"])
-        completion_percent = (logged / m["total_hours"]) * 100
 
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
-        # --------------------------------------------------
-        # FEASIBILITY
-        # --------------------------------------------------
+        # ------------------------------------------
+        # FORECAST
+        # ------------------------------------------
 
-        max_possible_output = adaptive_capacity * days_remaining
-        infeasible = remaining > max_possible_output
-
-        if infeasible:
-            deadline_load = "🚫 IMPOSSIBLE"
-        elif required_daily > adaptive_capacity:
-            deadline_load = "⚠ DEADLINE IMPOSSIBLE"
-        elif required_daily > adaptive_capacity * 0.7:
-            deadline_load = "⚡ HIGH LOAD"
-        else:
-            deadline_load = "OK"
-
-        # --------------------------------------------------
-        # ML FORECAST
-        # --------------------------------------------------
-
-        if infeasible:
-            forecast = "🚫 MATHEMATICALLY INFEASIBLE"
-            confidence = 100.0
-
-        elif velocity_active:
+        if velocity_active:
 
             velocity_gap = required_daily - actual_velocity
             remaining_ratio = remaining / (remaining + 1)
@@ -196,7 +164,6 @@ def generate_operator_briefing(milestones):
             ]])
 
             prediction = model.predict(feature_vector)[0]
-            probabilities = model.predict_proba(feature_vector)[0]
 
             label_map = {
                 0: "SAFE",
@@ -205,15 +172,13 @@ def generate_operator_briefing(milestones):
             }
 
             forecast = label_map[prediction]
-            confidence = round(max(probabilities) * 100, 2)
 
         else:
             forecast = "INSUFFICIENT DATA"
-            confidence = 0.0
 
-        # --------------------------------------------------
-        # EXECUTION EMBEDDING
-        # --------------------------------------------------
+        # ------------------------------------------
+        # EMBEDDING
+        # ------------------------------------------
 
         embedding = compute_execution_embedding(
             remaining,
@@ -224,53 +189,32 @@ def generate_operator_briefing(milestones):
             phase
         )
 
-        # --------------------------------------------------
-        # OUTPUT
-        # --------------------------------------------------
-
-        print(f"Milestone: {m['title']}")
-        print(f"  Remaining Hours: {round(remaining,2)}")
-        print(f"  Days Remaining: {days_remaining}")
-        print(f"  Required Daily: {round(required_daily,2)} hrs/day")
-        print(f"  7-Day Velocity: {round(actual_velocity,2)} hrs/day")
-        print(f"  Completion: {round(completion_percent,2)}%")
-        print(f"  Deadline Load: {deadline_load}")
-        print(f"  Forecast: {forecast} ({confidence}% confidence)\n")
-
-        # --------------------------------------------------
-        # URGENCY SCORE
-        # --------------------------------------------------
+        # ------------------------------------------
+        # URGENCY
+        # ------------------------------------------
 
         if velocity_active:
             velocity_gap = required_daily - actual_velocity
-            adjusted_required = required_daily + (
+            urgency = required_daily + (
                 velocity_gap * VELOCITY_CORRECTION_FACTOR
             )
         else:
-            adjusted_required = required_daily
+            urgency = required_daily
 
-        # Phase-aware urgency modulation
-        if phase == "COLLAPSE":
-            adjusted_required *= 0.6
-        elif phase == "SURGE":
-            adjusted_required *= 1.2
-
-        if infeasible:
-            adjusted_required = required_daily
-
-        scored.append((adjusted_required, m["id"], remaining, embedding))
+        scored.append((urgency, m["id"], remaining, embedding))
 
         context_data[m["id"]] = {
             "remaining": remaining,
             "days_remaining": days_remaining,
             "required_daily": required_daily,
             "actual_velocity": actual_velocity,
-            "forecast": forecast
+            "forecast": forecast,
+            "embedding": embedding
         }
 
-    # --------------------------------------------------
-    # SORT
-    # --------------------------------------------------
+    # ------------------------------------------
+    # SORT BY URGENCY
+    # ------------------------------------------
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
@@ -284,26 +228,27 @@ def generate_operator_briefing(milestones):
         if hours_left <= 0:
             break
 
-        rl_alloc = choose_allocation(embedding, adaptive_capacity)
+        action = choose_allocation(embedding, adaptive_capacity)
 
-        if rl_alloc is not None:
-            allocate = min(rl_alloc, remaining, hours_left)
+        if action is not None:
+            allocate = min(action, remaining, hours_left)
         else:
             allocate = min(urgency, remaining, hours_left)
 
         plan.append((milestone_id, round(allocate, 2)))
         hours_left -= allocate
 
-    # --------------------------------------------------
-    # OUTPUT + LOGGING
-    # --------------------------------------------------
+    # ------------------------------------------
+    # EXECUTION + TD UPDATE
+    # ------------------------------------------
 
     for milestone_id, hours in plan:
 
-        print(f"- ID {milestone_id} → {hours} hrs")
-
         ctx = context_data[milestone_id]
 
+        print(f"- ID {milestone_id} → {hours} hrs")
+
+        # 1️⃣ Log plan
         log_plan(
             milestone_id=milestone_id,
             remaining=ctx["remaining"],
@@ -313,6 +258,58 @@ def generate_operator_briefing(milestones):
             allocated=hours,
             forecast=ctx["forecast"]
         )
+
+        # 2️⃣ Get previous state
+        prev_state_data = get_last_plan_state(milestone_id)
+
+        if prev_state_data:
+
+            prev_embedding = ctx["embedding"]
+            prev_required_daily = prev_state_data["required_daily"]
+            prev_forecast = prev_state_data["forecast"]
+
+            # simulate next state after allocation
+            new_remaining = ctx["remaining"] - hours
+            new_required_daily = new_remaining / ctx["days_remaining"]
+
+            next_embedding = compute_execution_embedding(
+                new_remaining,
+                ctx["days_remaining"],
+                new_required_daily,
+                ctx["actual_velocity"],
+                adaptive_capacity,
+                phase
+            )
+
+            # 3️⃣ Compute reward
+            reward = compute_reward(
+                prev_required_daily,
+                new_required_daily,
+                performance_ratio=1,  # simplified for now
+                prev_forecast=prev_forecast,
+                new_forecast=ctx["forecast"],
+                completed=new_remaining <= 0
+            )
+
+            # 4️⃣ Update plan reward
+            update_plan_reward(prev_state_data["plan_id"], reward)
+
+            # 5️⃣ Log transition
+            log_transition(
+                milestone_id,
+                prev_embedding,
+                hours,
+                reward,
+                next_embedding
+            )
+
+            # 6️⃣ TD update
+            td_update(
+                prev_embedding,
+                hours,
+                reward,
+                next_embedding
+            )
 
     print("\n===================================\n")
 
