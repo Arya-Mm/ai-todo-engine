@@ -63,6 +63,18 @@ def init_db():
         overload_flag INTEGER
     )
     """)
+    # RL Transitions
+    c.execute("""
+CREATE TABLE IF NOT EXISTS transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    milestone_id INTEGER,
+    state TEXT,
+    action REAL,
+    reward REAL,
+    next_state TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+""")
 
     conn.commit()
     conn.close()
