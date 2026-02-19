@@ -15,9 +15,9 @@ from reinforcement_allocator import choose_allocation
 from state_embedding import compute_execution_embedding
 
 
-# ==============================
+# ==================================================
 # CONFIG
-# ==============================
+# ==================================================
 
 MODEL_PATH = "deadline_risk_model.pkl"
 
@@ -34,9 +34,45 @@ SLIPPAGE_STREAK_LIMIT = 3
 model = joblib.load(MODEL_PATH)
 
 
-# ==============================
+# ==================================================
+# EXECUTION PHASE CLASSIFIER
+# ==================================================
+
+def compute_execution_phase():
+    performances = get_recent_performance(7)
+
+    if not performances:
+        return "STABLE"
+
+    under_streak = 0
+    over_streak = 0
+
+    for ratio in performances:
+        if ratio is None:
+            continue
+
+        if ratio < SLIPPAGE_THRESHOLD:
+            under_streak += 1
+            over_streak = 0
+        elif ratio > 1.1:
+            over_streak += 1
+            under_streak = 0
+        else:
+            under_streak = 0
+            over_streak = 0
+
+    if under_streak >= SLIPPAGE_STREAK_LIMIT:
+        return "COLLAPSE"
+
+    if over_streak >= 2:
+        return "SURGE"
+
+    return "STABLE"
+
+
+# ==================================================
 # SLIPPAGE DETECTION
-# ==============================
+# ==================================================
 
 def detect_slippage_streak():
     performances = get_recent_performance(7)
@@ -51,31 +87,35 @@ def detect_slippage_streak():
     return streak >= SLIPPAGE_STREAK_LIMIT, streak
 
 
-# ==============================
+# ==================================================
 # ADAPTIVE CAPACITY
-# ==============================
+# ==================================================
 
 def compute_adaptive_capacity():
+
     recent_7 = get_recent_daily_output(7)
     recent_3 = get_recent_daily_output(3)
 
     baseline = max(recent_7, recent_3)
     capacity = BASE_CAPACITY if baseline == 0 else baseline
 
-    slippage_flag, streak = detect_slippage_streak()
+    phase = compute_execution_phase()
 
-    if slippage_flag:
-        capacity *= 0.8
+    # Phase-aware scaling
+    if phase == "COLLAPSE":
+        capacity *= 0.7
+    elif phase == "SURGE":
+        capacity *= 1.1
 
     capacity = max(MIN_CAPACITY, capacity)
     capacity = min(MAX_CAPACITY, capacity)
 
-    return round(capacity, 2), slippage_flag, streak
+    return round(capacity, 2), phase
 
 
-# ==============================
+# ==================================================
 # OPERATOR BRIEFING
-# ==============================
+# ==================================================
 
 def generate_operator_briefing(milestones):
 
@@ -83,19 +123,15 @@ def generate_operator_briefing(milestones):
     scored = []
     context_data = {}
 
-    adaptive_capacity, slippage_flag, streak = compute_adaptive_capacity()
+    adaptive_capacity, phase = compute_adaptive_capacity()
 
     print("\n===== OPERATOR BRIEFING =====\n")
-    print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs")
+    print(f"Execution Phase: {phase}")
+    print(f"Adaptive Daily Capacity: {adaptive_capacity} hrs\n")
 
-    if slippage_flag:
-        print(f"⚠ SLIPPAGE DETECTED: {streak}-day underperformance streak\n")
-    else:
-        print("")
-
-    # -------------------------
+    # --------------------------------------------------
     # ANALYSIS LOOP
-    # -------------------------
+    # --------------------------------------------------
 
     for m in milestones:
 
@@ -117,16 +153,12 @@ def generate_operator_briefing(milestones):
 
         velocity_active = log_count >= VELOCITY_MIN_LOGS and actual_velocity > 0
 
-        # -------------------------
-        # FEASIBILITY CHECK
-        # -------------------------
+        # --------------------------------------------------
+        # FEASIBILITY
+        # --------------------------------------------------
 
         max_possible_output = adaptive_capacity * days_remaining
         infeasible = remaining > max_possible_output
-
-        # -------------------------
-        # DEADLINE LOAD
-        # -------------------------
 
         if infeasible:
             deadline_load = "🚫 IMPOSSIBLE"
@@ -137,9 +169,9 @@ def generate_operator_briefing(milestones):
         else:
             deadline_load = "OK"
 
-        # -------------------------
+        # --------------------------------------------------
         # ML FORECAST
-        # -------------------------
+        # --------------------------------------------------
 
         if infeasible:
             forecast = "🚫 MATHEMATICALLY INFEASIBLE"
@@ -179,9 +211,9 @@ def generate_operator_briefing(milestones):
             forecast = "INSUFFICIENT DATA"
             confidence = 0.0
 
-        # -------------------------
-        # EXECUTION STATE EMBEDDING
-        # -------------------------
+        # --------------------------------------------------
+        # EXECUTION EMBEDDING
+        # --------------------------------------------------
 
         embedding = compute_execution_embedding(
             remaining,
@@ -189,12 +221,12 @@ def generate_operator_briefing(milestones):
             required_daily,
             actual_velocity,
             adaptive_capacity,
-            slippage_flag
+            phase
         )
 
-        # -------------------------
+        # --------------------------------------------------
         # OUTPUT
-        # -------------------------
+        # --------------------------------------------------
 
         print(f"Milestone: {m['title']}")
         print(f"  Remaining Hours: {round(remaining,2)}")
@@ -203,23 +235,11 @@ def generate_operator_briefing(milestones):
         print(f"  7-Day Velocity: {round(actual_velocity,2)} hrs/day")
         print(f"  Completion: {round(completion_percent,2)}%")
         print(f"  Deadline Load: {deadline_load}")
-        print(f"  Forecast: {forecast} ({confidence}% confidence)")
+        print(f"  Forecast: {forecast} ({confidence}% confidence)\n")
 
-        if infeasible:
-            extra_hours = round(remaining - max_possible_output, 2)
-            required_capacity = round(remaining / days_remaining, 2)
-            extra_days = round((remaining / adaptive_capacity) - days_remaining, 2)
-
-            print("  ⚠ ENFORCEMENT REQUIRED")
-            print(f"  Extra Hours Beyond Capacity: {extra_hours}")
-            print(f"  Required Daily Capacity: {required_capacity} hrs/day")
-            print(f"  Deadline Extension Needed: {extra_days} days")
-
-        print("")
-
-        # -------------------------
+        # --------------------------------------------------
         # URGENCY SCORE
-        # -------------------------
+        # --------------------------------------------------
 
         if velocity_active:
             velocity_gap = required_daily - actual_velocity
@@ -229,8 +249,11 @@ def generate_operator_briefing(milestones):
         else:
             adjusted_required = required_daily
 
-        if slippage_flag:
-            adjusted_required *= 0.7
+        # Phase-aware urgency modulation
+        if phase == "COLLAPSE":
+            adjusted_required *= 0.6
+        elif phase == "SURGE":
+            adjusted_required *= 1.2
 
         if infeasible:
             adjusted_required = required_daily
@@ -245,9 +268,9 @@ def generate_operator_briefing(milestones):
             "forecast": forecast
         }
 
-    # -------------------------
-    # SORT BY URGENCY
-    # -------------------------
+    # --------------------------------------------------
+    # SORT
+    # --------------------------------------------------
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
@@ -261,7 +284,6 @@ def generate_operator_briefing(milestones):
         if hours_left <= 0:
             break
 
-        # RL Allocation Decision
         rl_alloc = choose_allocation(embedding, adaptive_capacity)
 
         if rl_alloc is not None:
@@ -272,9 +294,9 @@ def generate_operator_briefing(milestones):
         plan.append((milestone_id, round(allocate, 2)))
         hours_left -= allocate
 
-    # -------------------------
+    # --------------------------------------------------
     # OUTPUT + LOGGING
-    # -------------------------
+    # --------------------------------------------------
 
     for milestone_id, hours in plan:
 
